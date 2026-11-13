@@ -95,6 +95,37 @@ void VulkanTexture::upload() {
 		return;
 	}
 
+	// Low-end GPUs: store color textures as 16-bit to halve memory use and bandwidth.
+	// Textures with smooth alpha keep 8 bits per channel as 4-bit alpha visibly bands.
+	enum PackMode { PackNone, Pack565, Pack5551 };
+	PackMode pack = PackNone;
+	const bool rgbOrder = (getFormat() == Image::Format_R8G8B8 || getFormat() == Image::Format_R8G8B8A8);
+	const bool isColor = rgbOrder || getFormat() == Image::Format_B8G8R8 || getFormat() == Image::Format_B8G8R8A8;
+	if(isColor && !isIntensity() && m_renderer->useCompactTextures()) {
+		const VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+		                                    | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
+		                                    | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+		if(expandRGB) {
+			if(m_renderer->hasFormatSupport(VK_FORMAT_R5G6B5_UNORM_PACK16, needed)) {
+				pack = Pack565;
+				info = { VK_FORMAT_R5G6B5_UNORM_PACK16, vkSwizzleIdentity, 2 };
+			}
+		} else if(m_renderer->hasFormatSupport(VK_FORMAT_A1R5G5B5_UNORM_PACK16, needed)) {
+			const unsigned char * src = m_image.getData();
+			bool binaryAlpha = true;
+			for(size_t i = 0, n = m_image.getWidth() * m_image.getHeight(); i < n; i++) {
+				if(src[i * 4 + 3] != 0 && src[i * 4 + 3] != 0xff) {
+					binaryAlpha = false;
+					break;
+				}
+			}
+			if(binaryAlpha) {
+				pack = Pack5551;
+				info = { VK_FORMAT_A1R5G5B5_UNORM_PACK16, vkSwizzleIdentity, 2 };
+			}
+		}
+	}
+
 	// Each upload uses a new image: the old one may still be in use by the GPU
 	release();
 
@@ -157,7 +188,23 @@ void VulkanTexture::upload() {
 
 	VkDeviceSize size = VkDeviceSize(width) * height * info.bpp;
 	VulkanRenderer::StreamAllocation staging = m_renderer->allocateStream(size, 16);
-	if(expandRGB) {
+	if(pack != PackNone) {
+		const unsigned char * src = m_image.getData();
+		const size_t srcBpp = (pack == Pack565) ? 3 : 4;
+		const size_t ri = rgbOrder ? 0 : 2;
+		const size_t bi = rgbOrder ? 2 : 0;
+		uint16_t * dst = static_cast<uint16_t *>(staging.data);
+		for(size_t i = 0, n = size_t(width) * height; i < n; i++, src += srcBpp) {
+			uint16_t r = uint16_t(src[ri] >> 3);
+			uint16_t b = uint16_t(src[bi] >> 3);
+			if(pack == Pack565) {
+				dst[i] = uint16_t((r << 11) | (uint16_t(src[1] >> 2) << 5) | b);
+			} else {
+				uint16_t a = (src[3] != 0) ? 1 : 0;
+				dst[i] = uint16_t((a << 15) | (r << 10) | (uint16_t(src[1] >> 3) << 5) | b);
+			}
+		}
+	} else if(expandRGB) {
 		const unsigned char * src = m_image.getData();
 		unsigned char * dst = static_cast<unsigned char *>(staging.data);
 		for(size_t i = 0, n = size_t(width) * height; i < n; i++, src += 3, dst += 4) {

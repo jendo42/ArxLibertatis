@@ -175,6 +175,8 @@ public:
 
 	VkDevice device() const { return m_device; }
 	VmaAllocator allocator() const { return m_allocator; }
+	//! Store textures in 16-bit formats where this loses little quality (low-end GPUs)
+	bool useCompactTextures() const { return m_compactTextures; }
 
 	//! Number of the frame currently being recorded
 	u64 currentFrame() const { return m_frameNumber; }
@@ -208,6 +210,13 @@ public:
 	                  const unsigned short * indices = nullptr, size_t indexCount = 0);
 
 	bool hasFormatSupport(VkFormat format, VkFormatFeatureFlags features) const;
+	//! Detect tile-based / low-end GPUs and read the tuning environment variables
+	void configureLowEnd();
+	//! Create an attachment that is only used within a render pass (lazily allocated on tilers)
+	bool createAttachmentImage(const VkImageCreateInfo & info, VkImage & image, VmaAllocation & allocation);
+	//! Scale the swapchain image up from the scene image at the end of a frame
+	void blitScene(VkCommandBuffer cmd);
+	VkRect2D scaleRect(int32_t left, int32_t top, int32_t right, int32_t bottom) const;
 
 private:
 
@@ -258,6 +267,8 @@ private:
 		VkSwapchainKHR swapchain = VK_NULL_HANDLE;
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		VkExtent2D extent = { 0, 0 };
+		//! Size of the 3D render target - smaller than extent when render scaling is enabled
+		VkExtent2D renderExtent = { 0, 0 };
 		bool canCopy = false;
 		std::vector<VkImage> images;
 		std::vector<VkImageView> views;
@@ -269,6 +280,10 @@ private:
 		VkImage colorImage = VK_NULL_HANDLE;
 		VkImageView colorView = VK_NULL_HANDLE;
 		VmaAllocation colorAllocation = VK_NULL_HANDLE;
+		// Single-sample render target that is scaled up to the swapchain image (render scaling only)
+		VkImage sceneImage = VK_NULL_HANDLE;
+		VkImageView sceneView = VK_NULL_HANDLE;
+		VmaAllocation sceneAllocation = VK_NULL_HANDLE;
 	};
 
 	bool createInstance();
@@ -348,6 +363,13 @@ private:
 	bool m_hasDebugUtils;
 	bool m_hasPortabilitySubset;
 	bool m_hasSampleShading;
+	bool m_lowEnd;
+	bool m_compactTextures;
+	bool m_lazyMemory;
+	//! Render the scene at a fraction of the window resolution (ARX_VULKAN_RENDER_SCALE)
+	float m_renderScale;
+	bool m_renderScaled;
+	VkFilter m_scaleFilter;
 	VkSampleCountFlagBits m_maxSamples;
 	VkSampleCountFlagBits m_samples; //!< Sample count of the current render passes
 	bool m_antialiasingEnabled; //!< Set by SetAntialiasing()
@@ -384,6 +406,8 @@ private:
 	bool m_inRenderPass;
 	bool m_skipFrame;
 	uint32_t m_renderPassCount;
+	//! Whether anything was drawn or cleared in the current frame (attachments are not preserved)
+	bool m_frameHasContent;
 
 	// Queue submission and presentation run on a separate thread
 	std::thread m_queueThread;
