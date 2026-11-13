@@ -20,7 +20,7 @@ if(_Inkscape_HELP MATCHES "--without-gui")
 endif()
 
 if(NOT DEFINED Inkscape_EXPORT)
-	foreach(option IN ITEMS "--export-file" "--export-filename" "--export-png")
+	foreach(option IN ITEMS "--export-filename" "--export-file" "--export-png")
 		if(_Inkscape_HELP MATCHES "${option}=")
 			set(Inkscape_EXPORT "${option}" CACHE STRING "Inkscape option to specify the export filename")
 			break()

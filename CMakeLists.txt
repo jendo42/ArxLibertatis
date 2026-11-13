@@ -1331,6 +1331,7 @@ endif()
 if(ARX_HAVE_VULKAN)
 	set(VULKAN_SHADER_DIR "${PROJECT_SOURCE_DIR}/src/graphics/vulkan/shaders")
 	set(VULKAN_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders")
+	set(VMA_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/thirdparty/VulkanMemoryAllocator")
 	file(MAKE_DIRECTORY "${VULKAN_SHADER_OUTPUT_DIR}")
 	# name;source;extra arguments
 	foreach(shader "TexturedVertex.vert|TexturedVertex.vert|" "Vertex.vert|Vertex.vert|"
