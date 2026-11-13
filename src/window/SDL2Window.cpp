@@ -52,6 +52,10 @@
 #include "gui/Credits.h"
 #include "graphics/opengl/GLDebug.h"
 #include "graphics/opengl/OpenGLRenderer.h"
+#if ARX_HAVE_VULKAN
+#include <SDL_vulkan.h>
+#include "graphics/vulkan/VulkanRenderer.h"
+#endif
 #include "input/SDL2InputBackend.h"
 #include "io/log/Logger.h"
 #include "math/Rectangle.h"
@@ -71,9 +75,56 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
+#if ARX_HAVE_VULKAN
+
+class SDL2VulkanWindow final : public VulkanWindow {
+	
+	SDL2Window & m_owner;
+	
+public:
+	
+	explicit SDL2VulkanWindow(SDL2Window & owner) : m_owner(owner) { }
+	
+	bool getVulkanInstanceExtensions(std::vector<const char *> & extensions) override {
+		unsigned int count = 0;
+		if(!SDL_Vulkan_GetInstanceExtensions(m_owner.m_window, &count, nullptr)) {
+			return false;
+		}
+		std::vector<const char *> names(count);
+		if(!SDL_Vulkan_GetInstanceExtensions(m_owner.m_window, &count, names.data())) {
+			return false;
+		}
+		extensions.insert(extensions.end(), names.begin(), names.begin() + count);
+		return true;
+	}
+	
+	VkSurfaceKHR createVulkanSurface(VkInstance instance) override {
+		VkSurfaceKHR surface = VK_NULL_HANDLE;
+		if(!SDL_Vulkan_CreateSurface(m_owner.m_window, instance, &surface)) {
+			LogError << "Could not create Vulkan surface: " << SDL_GetError();
+			return VK_NULL_HANDLE;
+		}
+		return surface;
+	}
+	
+	Vec2i getVulkanDrawableSize() override {
+		int w = 0, h = 0;
+		SDL_Vulkan_GetDrawableSize(m_owner.m_window, &w, &h);
+		return Vec2i(w, h);
+	}
+	
+};
+
+#else
+
+class SDL2VulkanWindow { };
+
+#endif
+
 SDL2Window::SDL2Window()
 	: m_window(nullptr)
 	, m_glcontext(nullptr)
+	, m_vulkanRenderer(nullptr)
 	, m_input(nullptr)
 	, m_minimizeOnFocusLost(AlwaysEnabled)
 	, m_allowScreensaver(AlwaysDisabled)
@@ -82,6 +133,14 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
+	#if ARX_HAVE_VULKAN
+	if(config.video.renderer == "Vulkan") {
+		m_vulkanWindow = std::make_unique<SDL2VulkanWindow>(*this);
+		m_vulkanRenderer = new VulkanRenderer(*m_vulkanWindow);
+		m_renderer = m_vulkanRenderer;
+		return;
+	}
+	#endif
 	m_renderer = new OpenGLRenderer;
 }
 
@@ -249,6 +308,34 @@ static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
 	return flags;
 }
 
+int SDL2Window::createWindowAndVulkan() {
+	
+	#if ARX_HAVE_VULKAN
+	
+	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
+	windowFlags |= SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
+	
+	m_window = SDL_CreateWindow(m_title.c_str(), SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+	                            m_mode.resolution.x, m_mode.resolution.y, windowFlags);
+	if(!m_window) {
+		LogError << "Could not create Vulkan window: " << SDL_GetError();
+		return 0;
+	}
+	
+	if(!m_vulkanRenderer->create()) {
+		return 0;
+	}
+	
+	m_vulkanRenderer->setVSync(m_vsync);
+	
+	return 1;
+	
+	#else
+	return 0;
+	#endif
+	
+}
+
 int SDL2Window::createWindowAndGLContext(const char * profile) {
 	
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
@@ -379,10 +466,30 @@ bool SDL2Window::initialize() {
 	gldebug::Mode debugMode = gldebug::mode();
 	
 	int samples = 0;
+	
+	#if ARX_HAVE_VULKAN
+	if(m_vulkanRenderer) {
+		samples = createWindowAndVulkan();
+		if(samples == 0) {
+			LogWarning << "Could not initialize the Vulkan renderer, falling back to OpenGL";
+			Renderer * renderer = new OpenGLRenderer;
+			m_renderer->moveListeners(*renderer);
+			delete m_renderer;
+			m_renderer = renderer;
+			m_vulkanRenderer = nullptr;
+			m_vulkanWindow.reset();
+			if(m_window) {
+				SDL_DestroyWindow(m_window);
+				m_window = nullptr;
+			}
+		}
+	}
+	#endif
+	
 	for(int api = 0; api < 2 && samples == 0; api++) {
 		bool first = (api == 0);
 		
-		bool matched = false;
+		bool matched = (config.video.renderer == "Vulkan");
 		
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL")) {
 			matched = true;
@@ -532,6 +639,9 @@ bool SDL2Window::initialize() {
 		}
 		
 		int red = 0, green = 0, blue = 0, alpha = 0, depth = 0, doublebuffer = 0;
+		if(m_vulkanRenderer) {
+			LogInfo << "Window: " << windowSystem << " (Vulkan)";
+		} else {
 		SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &red);
 		SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE, &green);
 		SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE, &blue);
@@ -541,6 +651,7 @@ bool SDL2Window::initialize() {
 		LogInfo << "Window: " << windowSystem << " r:" << red << " g:" << green << " b:" << blue
 		        << " a:" << alpha << " depth:" << depth << " aa:" << samples << "x"
 		        << " doublebuffer:" << doublebuffer;
+		}
 	}
 	
 	// Use the executable icon for the window
@@ -597,6 +708,13 @@ void SDL2Window::setTitle(const std::string & title) {
 }
 
 bool SDL2Window::setVSync(int vsync) {
+	#if ARX_HAVE_VULKAN
+	if(m_vulkanRenderer) {
+		m_vulkanRenderer->setVSync(vsync);
+		m_vsync = vsync;
+		return true;
+	}
+	#endif
 	if(m_window && SDL_GL_SetSwapInterval(vsync) != 0) {
 		if(vsync != 0 && vsync != 1) {
 			return setVSync(1);
@@ -839,6 +957,12 @@ void SDL2Window::processEvents(bool waitForEvent) {
 
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
+	#if ARX_HAVE_VULKAN
+	if(m_vulkanRenderer) {
+		m_vulkanRenderer->present();
+		return;
+	}
+	#endif
 	SDL_GL_SwapWindow(m_window);
 }
 

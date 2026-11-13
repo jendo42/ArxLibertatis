@@ -20,12 +20,18 @@
 #ifndef ARX_WINDOW_SDL2WINDOW_H
 #define ARX_WINDOW_SDL2WINDOW_H
 
+#include <memory>
+
 #include <SDL.h>
+
+#include "Configure.h"
 
 #include "platform/Platform.h"
 #include "window/RenderWindow.h"
 
 class SDL2InputBackend;
+class VulkanRenderer;
+class VulkanWindow;
 
 typedef enum {
 	ARX_SDL_SYSWM_UNKNOWN,
@@ -75,6 +81,7 @@ public:
 private:
 	
 	int createWindowAndGLContext(const char * profile);
+	int createWindowAndVulkan();
 	
 	void changeMode(DisplayMode mode, bool fullscreen);
 	void updateSize(bool force = false);
@@ -85,6 +92,11 @@ private:
 	
 	SDL_Window * m_window;
 	SDL_GLContext m_glcontext;
+	
+	VulkanRenderer * m_vulkanRenderer; //!< Same as m_renderer if using Vulkan
+	std::unique_ptr<VulkanWindow> m_vulkanWindow;
+	
+	friend class SDL2VulkanWindow;
 	
 	SDL2InputBackend * m_input;
 	

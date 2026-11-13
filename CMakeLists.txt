@@ -72,6 +72,7 @@ option(INSTALL_SCRIPTS "Install the data install script" ON)
 # Optional dependencies
 option(USE_OPENAL "Build the OpenAL audio backend" ON)
 option(USE_OPENGL "Build the OpenGL renderer backend" ON)
+option(USE_VULKAN "Build the Vulkan renderer backend (SDL 2 only)" ON)
 option(USE_WINHTTP "Use the native WinHTTP API instead of CURL on Windows" ON)
 option(USE_NATIVE_FS "Use the native filesystem backend directly instead of boost" ON)
 set(default_USE_X11 OFF)
@@ -438,6 +439,27 @@ if(USE_OPENGL)
 			set(ARX_HAVE_GLEW 1)
 			set(ARX_HAVE_OPENGL 1)
 			set(ARX_HAVE_GL_STATIC ${GLEW_USE_STATIC_LIBS})
+		endif()
+	endif()
+endif()
+
+# Vulkan
+if(USE_VULKAN)
+	find_package(Vulkan ${OPTIONAL_DEPENDENCY})
+	find_program(GLSLANG_VALIDATOR NAMES glslangValidator
+	             HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin")
+	find_path(VMA_INCLUDE_DIR vk_mem_alloc.h PATH_SUFFIXES vma)
+	if(Vulkan_FOUND AND GLSLANG_VALIDATOR AND VMA_INCLUDE_DIR)
+		set(ARX_HAVE_VULKAN 1)
+	else()
+		if(NOT GLSLANG_VALIDATOR)
+			message(STATUS "glslangValidator not found - Vulkan renderer disabled")
+		endif()
+		if(NOT VMA_INCLUDE_DIR)
+			message(STATUS "Vulkan Memory Allocator (vk_mem_alloc.h) not found - Vulkan renderer disabled")
+		endif()
+		if(STRICT_USE)
+			message(FATAL_ERROR "Vulkan renderer requested but dependencies are missing")
 		endif()
 	endif()
 endif()
@@ -1048,6 +1070,13 @@ set(GRAPHICS_OPENGL_SOURCES
 	src/graphics/opengl/OpenGLUtil.cpp
 )
 
+set(GRAPHICS_VULKAN_SOURCES
+	src/graphics/vulkan/VulkanMemory.cpp
+	src/graphics/vulkan/VulkanRenderer.cpp
+	src/graphics/vulkan/VulkanTexture.cpp
+	src/graphics/vulkan/VulkanTextureStage.cpp
+)
+
 set(GUI_SOURCES
 	src/gui/CharacterCreation.cpp
 	src/gui/CinematicBorder.cpp
@@ -1294,6 +1323,46 @@ else()
 	unset(ARX_HAVE_SDL)
 	unset(ARX_HAVE_SDL1)
 	unset(ARX_HAVE_SDL2)
+endif()
+if(ARX_HAVE_VULKAN AND NOT ARX_HAVE_SDL2)
+	# The Vulkan renderer needs a SDL 2 window
+	unset(ARX_HAVE_VULKAN)
+endif()
+if(ARX_HAVE_VULKAN)
+	set(VULKAN_SHADER_DIR "${PROJECT_SOURCE_DIR}/src/graphics/vulkan/shaders")
+	set(VULKAN_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders")
+	file(MAKE_DIRECTORY "${VULKAN_SHADER_OUTPUT_DIR}")
+	# name;source;extra arguments
+	foreach(shader "TexturedVertex.vert|TexturedVertex.vert|" "Vertex.vert|Vertex.vert|"
+	               "Vertex3.vert|Vertex.vert|-DTHREE_TEXCOORDS" "Fragment.frag|Fragment.frag|")
+		string(REPLACE "|" ";" shader "${shader}")
+		list(GET shader 0 shader_name)
+		list(GET shader 1 shader_source)
+		list(LENGTH shader shader_length)
+		set(shader_args)
+		if(shader_length GREATER 2)
+			list(GET shader 2 shader_args)
+		endif()
+		string(REPLACE "." "_" shader_var "vk_shader_${shader_name}")
+		set(shader_output "${VULKAN_SHADER_OUTPUT_DIR}/${shader_name}.h")
+		# Compile at configure time: the generated headers must not be part of the unity build
+		set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+		             "${VULKAN_SHADER_DIR}/${shader_source}" "${VULKAN_SHADER_DIR}/Common.glsl")
+		execute_process(
+			COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1 ${shader_args}
+			        --vn ${shader_var} -o "${shader_output}" "${VULKAN_SHADER_DIR}/${shader_source}"
+			RESULT_VARIABLE shader_result
+			OUTPUT_VARIABLE shader_log
+			ERROR_VARIABLE shader_log
+		)
+		if(NOT shader_result EQUAL 0)
+			message(FATAL_ERROR "Could not compile Vulkan shader ${shader_name}:
+${shader_log}")
+		endif()
+	endforeach()
+	list(APPEND GRAPHICS_SOURCES ${GRAPHICS_VULKAN_SOURCES})
+	list(APPEND ARX_LIBRARIES Vulkan::Vulkan)
+	include_directories(SYSTEM ${VMA_INCLUDE_DIR})
 endif()
 
 # Windowing / input
@@ -1972,6 +2041,7 @@ print_configuration("Renderer"
 	ARX_HAVE_EPOXY "OpenGL (libepoxy)"
 	ARX_HAVE_EPOXY "OpenGL ES (libepoxy)"
 	ARX_HAVE_GLEW  "OpenGL (GLEW)"
+	ARX_HAVE_VULKAN "Vulkan"
 )
 print_configuration("Audio features"
 	ARX_HAVE_OPENAL_EFX  "EFX"

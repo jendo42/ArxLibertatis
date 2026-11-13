@@ -76,6 +76,11 @@ void Renderer::removeListener(Listener * listener) {
 	                  m_listeners.end());
 }
 
+void Renderer::moveListeners(Renderer & other) {
+	other.m_listeners.insert(other.m_listeners.end(), m_listeners.begin(), m_listeners.end());
+	m_listeners.clear();
+}
+
 void Renderer::onRendererInit() {
 	m_initialized = true;
 	for(Listener * listener : m_listeners) {

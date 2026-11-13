@@ -23,6 +23,8 @@
 #include <functional>
 #include <iomanip>
 #include <memory>
+
+#include "Configure.h"
 #include <numeric>
 #include <string>
 #include <string_view>
@@ -923,6 +925,9 @@ public:
 				switch(pos) {
 					case 0:  config.video.renderer = "auto"; break;
 					case 1:  config.video.renderer = "OpenGL";  break;
+					#if ARX_HAVE_VULKAN
+					case 2:  config.video.renderer = "Vulkan";  break;
+					#endif
 					default: arx_unreachable();
 				}
 			};
@@ -932,6 +937,12 @@ public:
 			if(config.video.renderer == "OpenGL") {
 				slider->selectLast();
 			}
+			#if ARX_HAVE_VULKAN
+			slider->addEntry("Vulkan");
+			if(config.video.renderer == "Vulkan") {
+				slider->selectLast();
+			}
+			#endif
 			addCenter(std::move(slider));
 		}
 		
