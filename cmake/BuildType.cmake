@@ -92,7 +92,7 @@ if(MSVC)
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
 		
 		# Disable RTTI
-		add_definitions(/GR-) # No RTTI
+		add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/GR->) # No RTTI (not for the resource compiler)
 		if(CMAKE_VERSION VERSION_LESS 3.20)
 			foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE)
 				string(REGEX REPLACE "/GR( |$)" "" ${flag_var} "${${flag_var}}")
